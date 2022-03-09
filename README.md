@@ -1,6 +1,10 @@
-md_update
+
+
 Data will be stored in a data warehouse.
-# Update me!
+
 Data analytics software will be used to create Business Intelligence
 analytics for the client
-main
+
+- Application monitoring software will be used to produce operational
+metrics, such as system errors, up-time and more.
+
