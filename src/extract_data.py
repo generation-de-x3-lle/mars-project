@@ -1,4 +1,5 @@
 import csv
+from sqlite3 import connect
 import psycopg2
 import os
 from dotenv import load_dotenv
@@ -62,7 +63,7 @@ def extract_data(filename):
 def clean_data(raw_data_list):
 
     clean_data_list = []
-    order_number = 1
+    baskets_list = []
     
     for raw_data in raw_data_list:
 
@@ -70,10 +71,8 @@ def clean_data(raw_data_list):
         clean_time = f'{time}:00'
         day , month , year = date.split('/')
         clean_date = f'{year}-{month}-{day}'
-        transaction_id = '{}-{}-{}-{}'.format(date, clean_time, raw_data.get('branch_name'),order_number )
-        
+
         clean_data_item= {
-            'transaction_id':transaction_id,
             'date':clean_date,
             'time' : clean_time,
             'branch_name': raw_data['branch_name'],
@@ -83,33 +82,21 @@ def clean_data(raw_data_list):
             'payment_method': raw_data['payment_method'],
             'card_number': raw_data['card_number']
         }
-        #print(clean_data_item)
-        clean_data_list.append(clean_data_item)
-        order_number += 1
 
+        query = f''' Insert into Transactions ( transaction_date, transaction_time, branch_name,total_amount,payment_method) 
+        values ('{clean_data_item.get('date')}', '{clean_data_item.get('time')}', '{clean_data_item['branch_name']}',
+        {clean_data_item['total_amount']}, '{clean_data_item.get('payment_method')}') '''
 
-    return clean_data_list
+        transaction_id = int(commit_query(query))
 
-
-
-
-def get_baskets_list(clean_list):
-
-
-    baskets_list = []
-
-    for data in clean_list:
-
-        orders = (data['basket_items']).strip('"').split(',')
-        i = 0
+        
+        orders = (clean_data_item['basket_items']).strip('"').split(',')
+        #i = 0
         for order in orders:
 
             items_list= order.split(' - ')
 
-            item_dict = {'transaction_id': data.get('transaction_id'),
-                        'item_name':'',
-                        'item_flavour':'Standard',
-                        'item_size':'',
+            item_dict = {'transaction_id': transaction_id,
                         'item_price': float(items_list[-1]) }
 
             if items_list[0].strip().startswith('Regular'):
@@ -133,20 +120,65 @@ def get_baskets_list(clean_list):
                     item_dict['item_size'] ='Large'
                     item_dict['item_name'] = items_list[0][6:]
 
-            baskets_list.append(item_dict)
+            connection = connect_to_db()
+            cursor = connection.cursor()
+            fetch_query = f''' SELECT * FROM products '''
+            cursor.execute(fetch_query)
+            items = cursor.fetchall()
 
-    return baskets_list
 
-    
+            for item in items:
+
+                if (item_dict['item_name'] == item[2]) and (item_dict['item_size'] == item[1]) and (item_dict['item_flavour'] == item [3]) and (item_dict['item_price'] == item[4]):
+                    item_id = int(item[0])
+                    insert_to_basket_query = f''' insert into baskets (transaction_id, product_id) 
+                    values ({transaction_id},{item_id})  '''
+                    commit_query(insert_to_basket_query) 
+
+                else:
+                    isert_query = f''' insert into products (item_size, item_name, item_flavour, item_price)
+                    values ('{item_dict['item_size']}','{item_dict['item_name']}','{item_dict['item_flavour']}',{item_dict['item_price']})            
+                    '''
+                    product_id = int(commit_query(isert_query))
+
+                    insert_basket_query = f''' insert into baskets (transaction_id, product_id) 
+                    values ({transaction_id},{product_id})  ''' 
+
+                    commit_query(insert_basket_query)
+
+
+    #         baskets_list.append(item_dict)
+
+    #     clean_data_list.append(clean_data_item)
+
+    # return [clean_data_list , baskets_list]
+
+
+
+
+def commit_query(query):
+
+    connection = connect_to_db()
+    cursor = connection.cursor()
+    connection.autocommit = True
+    cursor.execute(query)
+    connection.commit()
+    last_row_id = cursor.lastrowid
+    cursor.close()
+    connection.close()
+    return last_row_id
+
+
 
 
 list_data = extract_data('chesterfield_25-08-2021_09-00-00.csv')
-clean_data_list = clean_data(list_data)
-baskets =get_baskets_list(clean_data_list)
+clean_data(list_data)
+#clean_data_list , baskets = clean_data(list_data)
+#baskets =get_baskets_list(clean_data_list)
 
 
-for basket in baskets:
-    print(basket)
+# for basket in baskets:
+#     print(basket)
 
 
 # connection = connect_to_db()
