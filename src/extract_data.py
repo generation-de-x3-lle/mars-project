@@ -1,31 +1,9 @@
 import csv
-from sqlite3 import connect
+from create_table import connect_to_db
 import psycopg2
 import os
 from dotenv import load_dotenv
 
-
-
-
-
-def connect_to_db():
-# Load environment variables from .env file
-    load_dotenv()
-    host = os.environ.get("POSTGRES_HOST")
-    user = os.environ.get("POSTGRES_USER")
-    password = os.environ.get("POSTGRES_PASSWORD")
-    database = os.environ.get("POSTGRES_DB")
-
-# Establish a database connection
-
-    connection = psycopg2.connect(
-    host=host,
-    user=user,
-    password=password,
-    database=database
-)
-
-    return connection
 
 
 
@@ -62,9 +40,6 @@ def extract_data(filename):
 
 def clean_data(raw_data_list):
 
-    clean_data_list = []
-    baskets_list = []
-    
     for raw_data in raw_data_list:
 
         date , time = (raw_data.get('date_time')).split(' ')
@@ -83,76 +58,82 @@ def clean_data(raw_data_list):
             'card_number': raw_data['card_number']
         }
 
-        query = f''' Insert into Transactions ( transaction_date, transaction_time, branch_name,total_amount,payment_method) 
+        query = f''' Insert into transactions ( transaction_date, transaction_time, branch_name,total_amount,payment_method) 
         values ('{clean_data_item.get('date')}', '{clean_data_item.get('time')}', '{clean_data_item['branch_name']}',
-        {clean_data_item['total_amount']}, '{clean_data_item.get('payment_method')}') '''
+        {clean_data_item['total_amount']}, '{clean_data_item.get('payment_method')}') returning transaction_id'''
+        transaction_connection = connect_to_db()
+        cursor = transaction_connection.cursor()
+        cursor.execute(query)
+        transaction_id = cursor.fetchone()[0]
+        transaction_connection.commit()
+        transaction_connection.close()
 
-        transaction_id = int(commit_query(query))
-
-        
         orders = (clean_data_item['basket_items']).strip('"').split(',')
-        #i = 0
-        for order in orders:
+        transform_to_basket( transaction_id, orders)
+        
+       
 
-            items_list= order.split(' - ')
 
-            item_dict = {'transaction_id': transaction_id,
-                        'item_price': float(items_list[-1]) }
+def transform_to_basket(transaction_id, orders):
 
-            if items_list[0].strip().startswith('Regular'):
-                if 'Flavoured' in items_list[0]:
-                        
-                    item_dict['item_size'] ='Regular'
-                    item_dict['item_flavour'] = items_list[1]
-                    item_dict['item_name'] = (items_list[0].split(' Flavoured '))[1]
+    for order in orders:
 
-                else:
-                    item_dict['item_size'] ='Regular'
-                    item_dict['item_name'] = str(items_list[0])[8:]
+        items_list= order.split(' - ')
+        item_dict = {}
+        item_dict['item_price'] = float(items_list[-1].strip()) 
+        item_dict['item_flavour'] = 'Standard'
 
-            elif items_list[0].strip().startswith('Large'):
-                if 'Flavoured' in items_list[0]:
+        if items_list[0].strip().startswith('Regular'):
+            if 'Flavoured' in items_list[0]:
+                item_dict['item_size'] = 'Regular'
+                item_dict['item_flavour'] = (items_list[1]).title().strip()
+                item_dict['item_name'] = ((items_list[0].split('Flavoured'))[1]).title().strip()
 
-                    item_dict['item_size'] ='Large'
-                    item_dict['item_flavour'] = items_list[1]
-                    item_dict['item_name'] = (str(items_list[0]).split(' Flavoured '))[1]
-                else:
-                    item_dict['item_size'] ='Large'
-                    item_dict['item_name'] = items_list[0][6:]
+            else:
+                item_dict['item_size'] ='Regular'
+                item_dict['item_name'] = (items_list[0][8:]).title().strip()
+
+        elif items_list[0].strip().startswith('Large'):
+            if 'Flavoured' in (items_list[0]):
+                item_dict['item_size'] ='Large'
+                item_dict['item_flavour'] = (items_list[1]).title().strip()
+                item_dict['item_name'] = ((str(items_list[0]).split('Flavoured'))[1]).title().strip()
+            else:
+                item_dict['item_size'] ='Large'
+                item_dict['item_name'] = (items_list[0][6:]).title().strip()
+
+        connection = connect_to_db()
+        cursor = connection.cursor()
+
+        fetch_query = f''' SELECT * FROM products where item_size ='{item_dict['item_size']}' and item_name = '{item_dict['item_name']}' and item_flavour = '{item_dict['item_flavour']}' and item_price = {item_dict['item_price']} '''
+        cursor.execute(fetch_query)
+        items = cursor.fetchall()
+        connection.close()
+
+        for item in items:
+            item_id = item[0]
+            break
+
+        if not(len(items)):
+            insert_query = f''' insert into products (item_size, item_name, item_flavour, item_price)
+                values ('{item_dict['item_size']}','{item_dict['item_name']}','{item_dict['item_flavour']}',
+                {item_dict['item_price']} ) returning product_id   '''
 
             connection = connect_to_db()
+            connection.autocommit = True
             cursor = connection.cursor()
-            fetch_query = f''' SELECT * FROM products '''
-            cursor.execute(fetch_query)
-            items = cursor.fetchall()
+            cursor.execute(insert_query)
+            product_id = cursor.fetchone()[0]
+            connection.commit()
+            connection.close()
 
+            insert_basket_query = f''' insert into baskets (transaction_id, product_id) 
+                values ({transaction_id},{product_id})  ''' 
+            commit_query(insert_basket_query)
+        else:
 
-            for item in items:
-
-                if (item_dict['item_name'] == item[2]) and (item_dict['item_size'] == item[1]) and (item_dict['item_flavour'] == item [3]) and (item_dict['item_price'] == item[4]):
-                    item_id = int(item[0])
-                    insert_to_basket_query = f''' insert into baskets (transaction_id, product_id) 
-                    values ({transaction_id},{item_id})  '''
-                    commit_query(insert_to_basket_query) 
-
-                else:
-                    isert_query = f''' insert into products (item_size, item_name, item_flavour, item_price)
-                    values ('{item_dict['item_size']}','{item_dict['item_name']}','{item_dict['item_flavour']}',{item_dict['item_price']})            
-                    '''
-                    product_id = int(commit_query(isert_query))
-
-                    insert_basket_query = f''' insert into baskets (transaction_id, product_id) 
-                    values ({transaction_id},{product_id})  ''' 
-
-                    commit_query(insert_basket_query)
-
-
-    #         baskets_list.append(item_dict)
-
-    #     clean_data_list.append(clean_data_item)
-
-    # return [clean_data_list , baskets_list]
-
+            insert_basket_query = f''' insert into baskets (transaction_id, product_id) values ({transaction_id},{item_id})  ''' 
+            commit_query(insert_basket_query)
 
 
 
@@ -163,34 +144,13 @@ def commit_query(query):
     connection.autocommit = True
     cursor.execute(query)
     connection.commit()
-    last_row_id = cursor.lastrowid
-    cursor.close()
     connection.close()
-    return last_row_id
-
+ 
 
 
 
 list_data = extract_data('chesterfield_25-08-2021_09-00-00.csv')
 clean_data(list_data)
-#clean_data_list , baskets = clean_data(list_data)
-#baskets =get_baskets_list(clean_data_list)
-
-
-# for basket in baskets:
-#     print(basket)
-
-
-# connection = connect_to_db()
-# connection.autocommit = True
-# cursor = connection.cursor()
-
-# query =  '''Drop TABLE employees; '''
-
-# cursor.execute(query)
-# connection.commit()
-# connection.close()
-
 
 
 
